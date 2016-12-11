@@ -265,7 +265,6 @@ static int dump_ca(void)
 
 	if (cs != 0) {
 		fprintf(stderr, "invalid CA checksum\n");
-		return 1;
 	}
 
 	for (i = 3; i < len; i += dlen) {
