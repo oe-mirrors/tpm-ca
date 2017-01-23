@@ -1,8 +1,8 @@
 /*
  * tpm-ca.c
  *
- * Copyright (C) 2014 Dream Property GmbH, Germany
- *                    http://www.dream-multimedia-tv.de/
+ * Copyright (C) 2017 Dream Property GmbH, Germany
+ *                    https://dreambox.de/
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,9 @@
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <inttypes.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -99,7 +101,29 @@ static void macdump(const char *name, const unsigned char *buf, unsigned int len
 	printf("\n");
 }
 
-static void send_cmd(int fd, enum tpmd_cmd cmd, const void *data, unsigned int len)
+static bool wait_event(int fd, unsigned int events, int timeout)
+{
+	struct pollfd pfd = {
+		.fd = fd,
+		.events = events,
+	};
+	int ret;
+
+	ret = poll(&pfd, 1, timeout);
+	if (ret < 0) {
+		perror("poll");
+		return false;
+	}
+
+	if (ret == 0) {
+		fprintf(stderr, "timeout\n");
+		return false;
+	}
+
+	return pfd.revents & events;
+}
+
+static bool send_cmd(int fd, enum tpmd_cmd cmd, const void *data, unsigned int len)
 {
 	unsigned char buf[len + 4];
 
@@ -109,14 +133,24 @@ static void send_cmd(int fd, enum tpmd_cmd cmd, const void *data, unsigned int l
 	buf[3] = (len >> 0) & 0xff;
 	memcpy(&buf[4], data, len);
 
-	if (write(fd, buf, sizeof(buf)) != (ssize_t)sizeof(buf))
+	if (!wait_event(fd, POLLOUT, 1000))
+		return false;
+
+	if (write(fd, buf, sizeof(buf)) != (ssize_t)sizeof(buf)) {
 		fprintf(stderr, "%s: incomplete write\n", __func__);
+		return false;
+	}
+
+	return true;
 }
 
 static void *recv_cmd(int fd, unsigned int *tag, unsigned int *len)
 {
 	unsigned char buf[4];
 	void *val;
+
+	if (!wait_event(fd, POLLIN, 1000))
+		return NULL;
 
 	if (read(fd, buf, 4) != 4)
 		fprintf(stderr, "%s: incomplete read\n", __func__);
@@ -221,7 +255,7 @@ static bool validate_cert(unsigned char dest[128],
 	return true;
 }
 
-static int dump_ca(void)
+static bool dump_ca(void)
 {
 	unsigned char mod[128];
 	unsigned char buf[128];
@@ -232,30 +266,30 @@ static int dump_ca(void)
 
 	if (!validate_cert(mod, fab_ca_cert, tpm_root_mod)) {
 		fprintf(stderr, "could not verify fab_ca_cert\n");
-		return 1;
+		return false;
 	}
 	if (!decrypt_block(buf, datablock_signed, 128, mod)) {
 		fprintf(stderr, "could not decrypt signed block\n");
-		return 1;
+		return false;
 	}
 
 	ca = &buf[1];
 
 	if (ca[0] != 0xca) {
 		fprintf(stderr, "invalid CA tag\n");
-		return 1;
+		return false;
 	}
 
 	if (ca[1] != 0x02) {
 		fprintf(stderr, "unknown CA version\n");
-		return 1;
+		return false;
 	}
 
 	len = ca[2];
 	if ((len < 3) ||
 	    (len > 126)) {
 		fprintf(stderr, "invalid CA length #1\n");
-		return 1;
+		return false;
 	}
 
 	// CA 02 LI .. .. FF 01 CS
@@ -293,13 +327,13 @@ static int dump_ca(void)
 
 	if (i != len) {
 		fprintf(stderr, "invalid CA length #2\n");
-		return 1;
+		return false;
 	}
 
-	return 0;
+	return true;
 }
 
-static int read_ca(int fd)
+static bool read_ca(int fd)
 {
 	unsigned char buf[2];
 	unsigned int tag, len;
@@ -307,9 +341,12 @@ static int read_ca(int fd)
 
 	buf[0] = TPMD_DT_FAB_CA_CERT;
 	buf[1] = TPMD_DT_DATABLOCK_SIGNED;
-	send_cmd(fd, TPMD_CMD_GET_DATA, buf, 2);
+	if (!send_cmd(fd, TPMD_CMD_GET_DATA, buf, 2))
+		return false;
 
 	val = recv_cmd(fd, &tag, &len);
+	if (val == NULL)
+		return false;
 	assert(tag == TPMD_CMD_GET_DATA);
 	parse_data(val, len);
 	free(val);
@@ -326,17 +363,21 @@ int main(void)
 	addr.sun_family = AF_UNIX;
 	strncpy(addr.sun_path, TPMD_SOCKET, sizeof(((struct sockaddr_un *)0)->sun_path));
 
-	fd = socket(PF_UNIX, SOCK_STREAM, 0);
+	fd = socket(PF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 	if (fd < 0) {
 		perror("socket");
 		return retval;
 	}
 
-	if (connect(fd, (const struct sockaddr *)&addr, sizeof(struct sockaddr_un)) < 0)
-		perror("connect");
-	else
-		retval = read_ca(fd);
+	if (connect(fd, (const struct sockaddr *)&addr, sizeof(struct sockaddr_un)) < 0) {
+		if (errno != EINPROGRESS) {
+			perror("connect");
+			return EXIT_FAILURE;
+		}
 
-	close(fd);
-	return retval;
+		if (!wait_event(fd, POLLOUT, 1000))
+			return EXIT_FAILURE;
+	}
+
+	return read_ca(fd) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
