@@ -196,25 +196,25 @@ static void rsa_pub1024(unsigned char dest[128],
 			const unsigned char src[128],
 			const unsigned char mod[128])
 {
-	BIGNUM bbuf, bexp, bmod;
+	BIGNUM *bbuf, *bexp, *bmod;
 	BN_CTX *ctx;
 
 	ctx = BN_CTX_new();
-	BN_init(&bbuf);
-	BN_init(&bexp);
-	BN_init(&bmod);
+	bbuf = BN_new();
+	bexp = BN_new();
+	bmod = BN_new();
 
-	BN_bin2bn(src, 128, &bbuf);
-	BN_bin2bn(mod, 128, &bmod);
-	BN_bin2bn((const unsigned char *)"\x01\x00\x01", 3, &bexp);
+	BN_bin2bn(src, 128, bbuf);
+	BN_bin2bn(mod, 128, bmod);
+	BN_bin2bn((const unsigned char *)"\x01\x00\x01", 3, bexp);
 
-	BN_mod_exp(&bbuf, &bbuf, &bexp, &bmod, ctx);
+	BN_mod_exp(bbuf, bbuf, bexp, bmod, ctx);
 
-	BN_bn2bin(&bbuf, dest);
+	BN_bn2bin(bbuf, dest);
 
-	BN_clear_free(&bexp);
-	BN_clear_free(&bmod);
-	BN_clear_free(&bbuf);
+	BN_clear_free(bexp);
+	BN_clear_free(bmod);
+	BN_clear_free(bbuf);
 	BN_CTX_free(ctx);
 }
 
