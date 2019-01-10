@@ -195,7 +195,7 @@ static void *recv_cmd(int fd, unsigned int *tag, unsigned int *len)
 	unsigned char buf[4];
 	void *val;
 
-	if (!wait_event(fd, POLLIN, 1000))
+	if (!wait_event(fd, POLLIN, 5000))
 		return NULL;
 
 	if (read(fd, buf, 4) != 4)
