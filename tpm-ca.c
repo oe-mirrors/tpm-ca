@@ -321,6 +321,14 @@ static bool validate_cert(unsigned char dest[128],
 	return true;
 }
 
+static int tpm2_verify_cb(int ok, X509_STORE_CTX *ctx)
+{
+	if (X509_STORE_CTX_get_error(ctx) == X509_V_ERR_CERT_NOT_YET_VALID)
+		return 1;
+
+	return ok;
+}
+
 static int tpm2_validate_cert(const unsigned char *leaf, size_t leaflen)
 {
 	const unsigned char *ptr;
@@ -341,6 +349,7 @@ static int tpm2_validate_cert(const unsigned char *leaf, size_t leaflen)
 		X509_STORE_CTX *store_ctx = X509_STORE_CTX_new();
 
 		X509_STORE_CTX_init(store_ctx, store, cert, NULL);
+		X509_STORE_CTX_set_verify_cb(store_ctx, tpm2_verify_cb);
 		if (X509_verify_cert(store_ctx) == 1)
 			ret = 0;
 		X509_STORE_CTX_free(store_ctx);
